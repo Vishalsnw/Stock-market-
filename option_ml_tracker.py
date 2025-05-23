@@ -8,19 +8,23 @@ import datetime
 import yfinance as yf
 from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.models import load_model
+from dotenv import load_dotenv
+
+# === LOAD .env VARIABLES ===
+load_dotenv("details.env")
 
 # === CONFIG ===
 SYMBOL = "RELIANCE.NS"
-MODEL_PATH = "intraday_model.h5"
-SCALER_PATH = "intraday_scaler.pkl"
-OUTPUT_CSV = "live_signals.csv"
-TELEGRAM_TOKEN = "7121966371:AAEKHVrsqLRswXg64-6Nf3nid-Mbmlmmw5M"
-TELEGRAM_CHAT_ID = "7621883960"
+MODEL_PATH = "models/intraday_model.h5"
+SCALER_PATH = "models/intraday_scaler.pkl"
+OUTPUT_PARQUET = "combined_data.parquet"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# === DOWNLOAD MODELS ===
+# === DOWNLOAD MODELS (if needed) ===
 def download_model():
     gdown.download("https://drive.google.com/uc?id=1saHEBDvVA_rGEolcmKfvMjTN8OtmJMZv", MODEL_PATH, quiet=False)
-    gdown.download("https://drive.google.com/uc?id=1XXYYZZ", SCALER_PATH, quiet=False)  # Replace with actual scaler ID
+    gdown.download("https://drive.google.com/uc?id=1XXYYZZ", SCALER_PATH, quiet=False)  # Replace with actual ID
 
 # === FETCH OPTION DATA FROM YFINANCE ===
 def fetch_yfinance_options(symbol):
@@ -43,6 +47,10 @@ def fetch_yfinance_options(symbol):
 
 # === TELEGRAM NOTIFIER ===
 def send_telegram_message(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram credentials missing.")
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -51,7 +59,7 @@ def send_telegram_message(message):
     }
     requests.post(url, data=payload)
 
-# === RUN ML INFERENCE ===
+# === ML INFERENCE ===
 def run_prediction():
     if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
         download_model()
@@ -83,7 +91,7 @@ def run_prediction():
             msg += f"{row['Option type']} {row['strike']} | {row['Signal']} | LTP: {row['lastPrice']} | Target: {row['Predicted Close']:.2f}\n"
         send_telegram_message(msg)
 
-    df.to_csv(OUTPUT_CSV, index=False)
+    df.to_parquet(OUTPUT_PARQUET, index=False)
 
 if __name__ == "__main__":
     run_prediction()
