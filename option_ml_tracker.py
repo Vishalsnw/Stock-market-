@@ -2,7 +2,6 @@ import os
 import pandas as pd
 import numpy as np
 import requests
-import gdown
 import joblib
 import datetime
 import yfinance as yf
@@ -15,16 +14,11 @@ load_dotenv("details.env")
 
 # === CONFIG ===
 SYMBOL = "RELIANCE.NS"
-MODEL_PATH = "models/intraday_model.h5"
+MODEL_PATH = "models/intraday_model.pkl"
 SCALER_PATH = "models/intraday_scaler.pkl"
 OUTPUT_PARQUET = "combined_data.parquet"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-# === DOWNLOAD MODELS (if needed) ===
-def download_model():
-    gdown.download("https://drive.google.com/uc?id=1saHEBDvVA_rGEolcmKfvMjTN8OtmJMZv", MODEL_PATH, quiet=False)
-    gdown.download("https://drive.google.com/uc?id=1XXYYZZ", SCALER_PATH, quiet=False)  # Replace with actual ID
 
 # === FETCH OPTION DATA FROM YFINANCE ===
 def fetch_yfinance_options(symbol):
@@ -62,14 +56,16 @@ def send_telegram_message(message):
 # === ML INFERENCE ===
 def run_prediction():
     if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
-        download_model()
+        print("Model or Scaler file missing!")
+        return
 
     df = fetch_yfinance_options(SYMBOL)
     if df.empty:
         print("No option data found.")
         return
 
-    features = ['strike', 'open', 'high', 'low', 'lastPrice', 'impliedVolatility', 'volume', 'openInterest', 'Underlying Value']
+    features = ['strike', 'open', 'high', 'low', 'lastPrice', 'impliedVolatility',
+                'volume', 'openInterest', 'Underlying Value']
     df = df.dropna(subset=features)
     X = df[features]
 
