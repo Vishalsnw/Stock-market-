@@ -12,12 +12,17 @@ load_dotenv("details.env")
 
 # === CONFIG ===
 SYMBOLS = [
-    "^NSEI", "^NSEBANK", "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS",
-    "ICICIBANK.NS", "LT.NS", "SBIN.NS", "ITC.NS", "AXISBANK.NS"
+    "^NSEI", "^NSEBANK", "RELIANCE.NS", "TCS.NS", "INFY.NS",
+    "HDFCBANK.NS", "ICICIBANK.NS", "LT.NS", "SBIN.NS", "ITC.NS", "AXISBANK.NS"
 ]
-MODEL_PATH = "intraday_model.pkl"  # Updated path
-SCALER_PATH = "scaler.pkl"         # Updated path
-OUTPUT_PARQUET = "combined_data.parquet"
+
+# === REPO ROOT PATH ===
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+MODEL_PATH = os.path.join(BASE_DIR, "intraday_model.pkl")
+SCALER_PATH = os.path.join(BASE_DIR, "scaler.pkl")
+OUTPUT_PARQUET = os.path.join(BASE_DIR, "combined_data.parquet")
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -65,7 +70,8 @@ def run_prediction():
         print("No data.")
         return
 
-    features = ['strike', 'open', 'high', 'low', 'lastPrice', 'impliedVolatility', 'volume', 'openInterest', 'Underlying Value']
+    features = ['strike', 'open', 'high', 'low', 'lastPrice', 'impliedVolatility',
+                'volume', 'openInterest', 'Underlying Value']
     df = df.dropna(subset=features)
     X = df[features]
 
