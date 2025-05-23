@@ -1,78 +1,94 @@
 import os
 import pandas as pd
 import numpy as np
+import requests
 import joblib
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from xgboost import XGBRegressor
-from sklearn.metrics import mean_absolute_error
+import datetime
+import yfinance as yf
+from dotenv import load_dotenv
 
-def clean_column_names(df):
-    df.columns = [col.encode('ascii', 'ignore').decode().strip() for col in df.columns]
-    return df
+# === LOAD .env VARIABLES ===
+load_dotenv("details.env")
 
-def preprocess_data(df):
-    df = clean_column_names(df)
+# === CONFIG ===
+SYMBOLS = ["^NSEI", "^NSEBANK", "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "LT.NS", "SBIN.NS", "ITC.NS", "AXISBANK.NS"]
+MODEL_PATH = "models/intraday_model.pkl"
+SCALER_PATH = "models/scaler.pkl"
+OUTPUT_PARQUET = "combined_data.parquet"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-    required_cols = [
-        'Strike Price', 'Open', 'High', 'Low', 'Close', 'LTP', 'Settle Price',
-        'No. of contracts', 'Turnover * in', 'Premium Turnover ** in',
-        'Open Int', 'Change in OI', 'Underlying Value'
-    ]
+# === FETCH OPTION DATA ===
+def fetch_all_options(symbols):
+    combined_df = []
+    for symbol in symbols:
+        try:
+            ticker = yf.Ticker(symbol)
+            expiry = ticker.options[0]
+            opt_chain = ticker.option_chain(expiry)
+            calls = opt_chain.calls
+            puts = opt_chain.puts
+            calls["Option type"] = "CE"
+            puts["Option type"] = "PE"
+            df = pd.concat([calls, puts], ignore_index=True)
+            df["Underlying"] = symbol
+            df["Underlying Value"] = ticker.info.get("regularMarketPrice", 0)
+            combined_df.append(df)
+        except Exception as e:
+            print(f"Error fetching {symbol}: {e}")
+    return pd.concat(combined_df, ignore_index=True) if combined_df else pd.DataFrame()
 
-    col_map = {}
-    for col in required_cols:
-        match = [c for c in df.columns if c.startswith(col)]
-        if match:
-            col_map[col] = match[0]
-        else:
-            raise ValueError(f"Required column not found: {col}")
+# === TELEGRAM ALERT ===
+def send_telegram_message(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram credentials missing.")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+    requests.post(url, data=payload)
 
-    df = df[list(col_map.values())]
-    df.columns = list(col_map.keys())
-
-    df = df.replace("-", np.nan).dropna()
-    df = df.apply(pd.to_numeric, errors='coerce').dropna()
-
-    X = df.drop('Close', axis=1)
-    y = df['Close']
-    return X, y
-
-def train_combined_model():
-    if not os.path.exists("combined_data.parquet"):
-        print("combined_data.csv file not found!")
+# === PREDICTION LOGIC ===
+def run_prediction():
+    if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
+        print("Model or Scaler missing.")
         return
 
-    print("Loading combined_data.csv ...")
-    df = pd.read_csv("combined_data.csv")
-
-    try:
-        X, y = preprocess_data(df)
-    except Exception as e:
-        print(f"Preprocessing failed: {e}")
+    df = fetch_all_options(SYMBOLS)
+    if df.empty:
+        print("No data.")
         return
 
-    print(f"Total records: {len(X)}")
+    features = ['strike', 'open', 'high', 'low', 'lastPrice', 'impliedVolatility', 'volume', 'openInterest', 'Underlying Value']
+    df = df.dropna(subset=features)
+    X = df[features]
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    scaler = joblib.load(SCALER_PATH)
+    X_scaled = scaler.transform(X)
 
-    X_train, X_val, y_train, y_val = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+    model = joblib.load(MODEL_PATH)
+    preds = model.predict(X_scaled)
 
-    print("Training XGBoost model ...")
-    model = XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
-    model.fit(X_train, y_train)
+    df['Predicted Close'] = preds
+    df['Signal'] = np.where(df['Predicted Close'] > df['lastPrice'], 'BUY', 'SELL')
+    df['Confidence'] = abs(df['Predicted Close'] - df['lastPrice']) / df['lastPrice']
+    high_conf = df[df['Confidence'] > 0.05]
 
-    y_pred = model.predict(X_val)
-    mae = mean_absolute_error(y_val, y_pred)
+    if not high_conf.empty:
+        now = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+        msg = f"<b>Options ML Signals @ {now}</b>\n"
+        for _, row in high_conf.iterrows():
+            msg += (
+                f"{row['Underlying']} {row['Option type']} {row['strike']} | "
+                f"{row['Signal']} | LTP: {row['lastPrice']} | "
+                f"Target: {row['Predicted Close']:.2f}\n"
+            )
+        send_telegram_message(msg)
 
-    print(f"Validation MAE: {mae:.4f}")
-
-    os.makedirs("models", exist_ok=True)
-    print("Saving model and scaler ...")
-    joblib.dump(model, "models/intraday_model.pkl")
-    joblib.dump(scaler, "models/scaler.pkl")
-    print("✅ Model and scaler saved to 'models/' and ready for prediction.")
+    df.to_parquet(OUTPUT_PARQUET, index=False)
 
 if __name__ == "__main__":
-    train_combined_model()
+    run_prediction()
