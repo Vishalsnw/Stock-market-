@@ -7,7 +7,7 @@ import requests
 from nsepython import nse_optionchain_scrapper
 
 # Set your Telegram bot token and chat ID here
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY"]
@@ -35,7 +35,6 @@ def send_telegram_message(message):
         print("Failed to send message:", e)
 
 def run_prediction():
-    # Load model from repo root (no downloading)
     if not os.path.exists("intraday_model.pkl") or not os.path.exists("scaler.pkl"):
         print("Model or Scaler file missing in repo root!")
         return
