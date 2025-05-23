@@ -11,9 +11,12 @@ from dotenv import load_dotenv
 load_dotenv("details.env")
 
 # === CONFIG ===
-SYMBOLS = ["^NSEI", "^NSEBANK", "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "LT.NS", "SBIN.NS", "ITC.NS", "AXISBANK.NS"]
-MODEL_PATH = "models/intraday_model.pkl"
-SCALER_PATH = "models/scaler.pkl"
+SYMBOLS = [
+    "^NSEI", "^NSEBANK", "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS",
+    "ICICIBANK.NS", "LT.NS", "SBIN.NS", "ITC.NS", "AXISBANK.NS"
+]
+MODEL_PATH = "intraday_model.pkl"  # Updated path
+SCALER_PATH = "scaler.pkl"         # Updated path
 OUTPUT_PARQUET = "combined_data.parquet"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
