@@ -1,91 +1,65 @@
 import os
-import pandas as pd
-import numpy as np
-import requests
 import joblib
+import numpy as np
+import pandas as pd
 import datetime
-import yfinance as yf
-from dotenv import load_dotenv
+import requests
+from nsepython import nse_optionchain_scrapper
 
-# === LOAD .env VARIABLES ===
-load_dotenv("details.env")
+# Set your Telegram bot token and chat ID here
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# === CONFIG ===
-SYMBOLS = [
-    "^NSEI", "^NSEBANK", "RELIANCE.NS", "TCS.NS", "INFY.NS",
-    "HDFCBANK.NS", "ICICIBANK.NS", "LT.NS", "SBIN.NS", "ITC.NS", "AXISBANK.NS"
-]
+SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY"]
 
-# === REPO ROOT PATH ===
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-MODEL_PATH = os.path.join(BASE_DIR, "intraday_model.pkl")
-SCALER_PATH = os.path.join(BASE_DIR, "scaler.pkl")
-OUTPUT_PARQUET = os.path.join(BASE_DIR, "combined_data.parquet")
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-# === FETCH OPTION DATA ===
 def fetch_all_options(symbols):
-    combined_df = []
-    for symbol in symbols:
+    all_data = []
+    for sym in symbols:
         try:
-            ticker = yf.Ticker(symbol)
-            expiry = ticker.options[0]
-            opt_chain = ticker.option_chain(expiry)
-            calls = opt_chain.calls
-            puts = opt_chain.puts
-            calls["Option type"] = "CE"
-            puts["Option type"] = "PE"
-            df = pd.concat([calls, puts], ignore_index=True)
-            df["Underlying"] = symbol
-            df["Underlying Value"] = ticker.info.get("regularMarketPrice", 0)
-            combined_df.append(df)
+            df = nse_optionchain_scrapper(sym)
+            df['Underlying'] = sym
+            all_data.append(df)
         except Exception as e:
-            print(f"Error fetching {symbol}: {e}")
-    return pd.concat(combined_df, ignore_index=True) if combined_df else pd.DataFrame()
+            print(f"Failed to fetch data for {sym}: {e}")
+    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
 
-# === TELEGRAM ALERT ===
 def send_telegram_message(message):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    if not BOT_TOKEN or not CHAT_ID:
         print("Telegram credentials missing.")
         return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML"
-    }
-    requests.post(url, data=payload)
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print("Failed to send message:", e)
 
-# === PREDICTION LOGIC ===
 def run_prediction():
-    if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
-        print("Model or Scaler missing.")
+    # Load model from repo root (no downloading)
+    if not os.path.exists("intraday_model.pkl") or not os.path.exists("scaler.pkl"):
+        print("Model or Scaler file missing in repo root!")
         return
+
+    model = joblib.load("intraday_model.pkl")
+    scaler = joblib.load("scaler.pkl")
 
     df = fetch_all_options(SYMBOLS)
     if df.empty:
-        print("No data.")
+        print("No option data found.")
         return
 
     features = ['strike', 'open', 'high', 'low', 'lastPrice', 'impliedVolatility',
                 'volume', 'openInterest', 'Underlying Value']
     df = df.dropna(subset=features)
     X = df[features]
-
-    scaler = joblib.load(SCALER_PATH)
     X_scaled = scaler.transform(X)
 
-    model = joblib.load(MODEL_PATH)
     preds = model.predict(X_scaled)
-
     df['Predicted Close'] = preds
     df['Signal'] = np.where(df['Predicted Close'] > df['lastPrice'], 'BUY', 'SELL')
     df['Confidence'] = abs(df['Predicted Close'] - df['lastPrice']) / df['lastPrice']
+    
     high_conf = df[df['Confidence'] > 0.05]
-
     if not high_conf.empty:
         now = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
         msg = f"<b>Options ML Signals @ {now}</b>\n"
@@ -97,7 +71,7 @@ def run_prediction():
             )
         send_telegram_message(msg)
 
-    df.to_parquet(OUTPUT_PARQUET, index=False)
+    df.to_parquet("combined_data.parquet", index=False)
 
 if __name__ == "__main__":
     run_prediction()
