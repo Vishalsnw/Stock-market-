@@ -3,7 +3,6 @@ numpy
 scikit-learn
 tensorflow
 joblib
-gdown
 requests
 beautifulsoup4
 lxml
