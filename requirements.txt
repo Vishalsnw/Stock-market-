@@ -10,3 +10,4 @@ yfinance             # For future stock price fetching
 python-telegram-bot  # If you move from requests to bot library
 python-dotenv
 nsepython
+xgboost
