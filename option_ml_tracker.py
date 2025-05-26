@@ -14,7 +14,7 @@ import joblib
 # === CONFIG ===
 load_dotenv("details.env")
 MODEL_PATH = "intraday_model.pkl"
-SCALER_PATH = "intraday_scaler.pkl"
+SCALER_PATH = "scaler.pkl"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TOP_SYMBOLS = ["RELIANCE.NS", "INFY.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "LT.NS", "SBIN.NS", "AXISBANK.NS", "ITC.NS", "HINDUNILVR.NS"]
