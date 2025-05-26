@@ -7,7 +7,6 @@ import requests
 import yfinance as yf
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
-from tensorflow.keras.models import load_model
 from dotenv import load_dotenv
 from nsepython import nse_optionchain_scrapper
 import joblib
@@ -23,7 +22,7 @@ INDEX_SYMBOLS = ["NIFTY", "BANKNIFTY"]
 ACTIVE_TRADES_FILE = "active_trades.json"
 
 # === LOAD MODEL ===
-model = load_model(MODEL_PATH)
+model = joblib.load(MODEL_PATH)
 scaler = joblib.load(SCALER_PATH)
 
 # === TELEGRAM ===
@@ -55,7 +54,8 @@ def fetch_nse_options():
             df = nse_optionchain_scrapper(sym)
             df["Underlying"] = sym
             all_data.append(df)
-        except: pass
+        except:
+            pass
     return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
 
 # === ACTIVE TRADES ===
