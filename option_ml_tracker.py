@@ -10,6 +10,9 @@ from sklearn.preprocessing import StandardScaler
 from dotenv import load_dotenv
 from nsepython import nse_optionchain_scrapper
 import joblib
+import warnings
+
+warnings.filterwarnings("ignore")
 
 # === CONFIG ===
 load_dotenv("details.env")
@@ -30,7 +33,10 @@ def send_telegram(message):
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-        requests.post(url, data=payload)
+        try:
+            requests.post(url, data=payload)
+        except:
+            pass
 
 # === FETCH OPTIONS ===
 def fetch_yfinance_options(symbol):
@@ -88,9 +94,10 @@ def run_prediction():
     X = df[features].astype(float)
     X_scaled = scaler.transform(X)
     preds = model.predict(X_scaled)
+
     df['Predicted Close'] = preds
     df['Confidence'] = abs(df['Predicted Close'] - df['lastPrice']) / df['lastPrice']
-    df['Signal'] = np.where((df['Predicted Close'] > df['lastPrice']) & (df['Confidence'] >= 0.9), 'BUY', 'HOLD')
+    df['Signal'] = np.where((df['Predicted Close'] > df['lastPrice']) & (df['Confidence'] >= 0.05), 'BUY', 'HOLD')
 
     active_trades = load_active_trades()
 
@@ -133,16 +140,21 @@ def check_exit_conditions(active_trades):
             updated[key] = trade
             continue
         ltp = float(match.iloc[0]['lastPrice'])
+        test_input = [[float(trade['strike']), ltp, ltp, ltp, ltp, 0, 0, 0, ltp]]
+        test_scaled = scaler.transform(test_input)
+        pred_close = model.predict(test_scaled)[0]
+
         if ltp >= trade['target']:
             send_telegram(f"<b>TARGET HIT:</b> {symbol} {trade['type']} {trade['strike']}\nPrice: {ltp}")
         elif ltp <= trade['sl']:
             send_telegram(f"<b>SL HIT:</b> {symbol} {trade['type']} {trade['strike']}\nPrice: {ltp}")
-        elif model.predict(scaler.transform([[float(trade['strike']), ltp, ltp, ltp, ltp, 0, 0, 0, ltp]]))[0] < ltp:
+        elif pred_close < ltp:
             send_telegram(f"<b>ML EXIT SIGNAL:</b> {symbol} {trade['type']} {trade['strike']}\nPrice: {ltp}")
         else:
             updated[key] = trade
     save_active_trades(updated)
 
+# === MAIN LOOP ===
 if __name__ == "__main__":
     while True:
         run_prediction()
