@@ -23,20 +23,29 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TOP_SYMBOLS = ["RELIANCE.NS", "INFY.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "LT.NS", "SBIN.NS", "AXISBANK.NS", "ITC.NS", "HINDUNILVR.NS"]
 INDEX_SYMBOLS = ["NIFTY", "BANKNIFTY"]
 ACTIVE_TRADES_FILE = "active_trades.json"
-
-# === LOAD MODEL ===
-model = joblib.load(MODEL_PATH)
-scaler = joblib.load(SCALER_PATH)
+DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
 
 # === TELEGRAM ===
 def send_telegram(message):
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
         try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
             requests.post(url, data=payload)
-        except:
-            pass
+        except Exception as e:
+            print(f"Telegram Error: {e}")
+
+# === LOGGING ===
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+
+# === LOAD MODEL AND SCALER ===
+if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
+    send_telegram("Model or Scaler file not found.")
+    raise FileNotFoundError("Model or Scaler file missing.")
+
+model = joblib.load(MODEL_PATH)
+scaler = joblib.load(SCALER_PATH)
 
 # === FETCH OPTIONS ===
 def fetch_yfinance_options(symbol):
@@ -50,7 +59,8 @@ def fetch_yfinance_options(symbol):
         df["Underlying"] = symbol
         df["Underlying Value"] = ticker.info.get("regularMarketPrice", 0)
         return df
-    except:
+    except Exception as e:
+        log(f"YFinance Error for {symbol}: {e}")
         return pd.DataFrame()
 
 def fetch_nse_options():
@@ -60,8 +70,8 @@ def fetch_nse_options():
             df = nse_optionchain_scrapper(sym)
             df["Underlying"] = sym
             all_data.append(df)
-        except:
-            pass
+        except Exception as e:
+            log(f"NSE fetch failed for {sym}: {e}")
     return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
 
 # === ACTIVE TRADES ===
@@ -77,6 +87,9 @@ def save_active_trades(data):
 
 # === MAIN PREDICTION LOGIC ===
 def run_prediction():
+    log("Starting prediction cycle...")
+    send_telegram("Prediction cycle started.")
+
     df_all = []
     for sym in TOP_SYMBOLS:
         df = fetch_yfinance_options(sym)
@@ -86,11 +99,16 @@ def run_prediction():
     if not df_index.empty:
         df_all.append(df_index)
     if not df_all:
+        log("No data fetched.")
         return
 
     df = pd.concat(df_all, ignore_index=True)
     features = ['strike', 'open', 'high', 'low', 'lastPrice', 'impliedVolatility', 'volume', 'openInterest', 'Underlying Value']
     df = df.dropna(subset=features)
+    if df.empty:
+        log("DataFrame empty after dropping NA.")
+        return
+
     X = df[features].astype(float)
     X_scaled = scaler.transform(X)
     preds = model.predict(X_scaled)
@@ -156,6 +174,17 @@ def check_exit_conditions(active_trades):
 
 # === MAIN LOOP ===
 if __name__ == "__main__":
+    log("Option ML Tracker started.")
+    send_telegram("Option ML Tracker started successfully.")
+
     while True:
-        run_prediction()
+        try:
+            run_prediction()
+        except Exception as e:
+            err_msg = f"Error in main loop: {str(e)}"
+            log(err_msg)
+            send_telegram(err_msg)
+
+        if DEBUG_MODE:
+            break  # exit after 1 loop in debug mode
         time.sleep(60)
