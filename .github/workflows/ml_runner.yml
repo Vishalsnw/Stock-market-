@@ -17,11 +17,19 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Install dependencies
+    - name: Install system & Python dependencies
       run: |
+        sudo apt-get update
+        sudo apt-get install -y libxml2-dev libxslt-dev python3-dev
+        pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run option_ml_tracker
+    - name: Load environment variables
+      run: echo "TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}" >> $GITHUB_ENV
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+
+    - name: Run Option ML Predictor
       run: |
         python option_ml_tracker.py
 
