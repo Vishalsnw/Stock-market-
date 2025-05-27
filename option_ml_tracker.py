@@ -4,7 +4,6 @@ import time
 import pandas as pd
 import numpy as np
 import requests
-import yfinance as yf
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
 from dotenv import load_dotenv
@@ -20,7 +19,7 @@ MODEL_PATH = "intraday_model.pkl"
 SCALER_PATH = "scaler.pkl"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-TOP_SYMBOLS = ["RELIANCE.NS", "INFY.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "LT.NS", "SBIN.NS", "AXISBANK.NS", "ITC.NS", "HINDUNILVR.NS"]
+TOP_SYMBOLS = ["RELIANCE", "INFY", "TCS", "HDFCBANK", "ICICIBANK", "LT", "SBIN", "AXISBANK", "ITC", "HINDUNILVR"]
 INDEX_SYMBOLS = ["NIFTY", "BANKNIFTY"]
 ACTIVE_TRADES_FILE = "active_trades.json"
 DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
@@ -47,28 +46,10 @@ if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
 model = joblib.load(MODEL_PATH)
 scaler = joblib.load(SCALER_PATH)
 
-# === FETCH OPTIONS ===
-def fetch_yfinance_options(symbol):
-    try:
-        ticker = yf.Ticker(symbol)
-        if not ticker.options:
-            log(f"YFinance Error for {symbol}: No options data available")
-            return pd.DataFrame()
-        expiry = ticker.options[0]
-        opt_chain = ticker.option_chain(expiry)
-        calls, puts = opt_chain.calls, opt_chain.puts
-        calls["Option type"], puts["Option type"] = "CE", "PE"
-        df = pd.concat([calls, puts], ignore_index=True)
-        df["Underlying"] = symbol
-        df["Underlying Value"] = ticker.info.get("regularMarketPrice", 0)
-        return df
-    except Exception as e:
-        log(f"YFinance Error for {symbol}: {e}")
-        return pd.DataFrame()
-
-def fetch_nse_options():
+# === FETCH OPTIONS DATA ===
+def fetch_nse_options(symbols):
     all_data = []
-    for sym in INDEX_SYMBOLS:
+    for sym in symbols:
         try:
             df = nse_optionchain_scrapper(sym)
             df["Underlying"] = sym
@@ -94,12 +75,14 @@ def run_prediction():
     send_telegram("Prediction cycle started.")
 
     df_all = []
-    for sym in TOP_SYMBOLS:
-        df = fetch_yfinance_options(sym)
-        if not df.empty:
-            df_all.append(df)
 
-    df_index = fetch_nse_options()
+    # Stock options
+    df_stock = fetch_nse_options(TOP_SYMBOLS)
+    if not df_stock.empty:
+        df_all.append(df_stock)
+
+    # Index options
+    df_index = fetch_nse_options(INDEX_SYMBOLS)
     if not df_index.empty:
         df_all.append(df_index)
 
@@ -109,11 +92,14 @@ def run_prediction():
 
     df = pd.concat(df_all, ignore_index=True)
 
-    features = ['strike', 'open', 'high', 'low', 'lastPrice', 'impliedVolatility', 'volume', 'openInterest', 'Underlying Value']
+    features = ['strikePrice', 'openPrice', 'highPrice', 'lowPrice', 'lastPrice',
+                'impliedVolatility', 'totalTradedVolume', 'openInterest', 'Underlying Value']
+    
     df = df.dropna(subset=features)
+    df = df[df['lastPrice'] > 0]
 
     if df.empty:
-        log("DataFrame empty after dropping NA.")
+        log("DataFrame empty after dropping NA or filtering.")
         return
 
     X = df[features].astype(float)
@@ -127,15 +113,15 @@ def run_prediction():
     active_trades = load_active_trades()
 
     for _, row in df[df['Signal'] == 'BUY'].iterrows():
-        key = f"{row['Underlying']}_{row['strike']}_{row['Option type']}"
+        key = f"{row['Underlying']}_{row['strikePrice']}_{row['optionType']}"
         if key not in active_trades:
             buy_price = float(row['lastPrice'])
             target = round(buy_price * 1.10, 2)
             sl = round(buy_price * 0.95, 2)
             active_trades[key] = {
                 "symbol": row['Underlying'],
-                "strike": row['strike'],
-                "type": row['Option type'],
+                "strike": row['strikePrice'],
+                "type": row['optionType'],
                 "buy_price": buy_price,
                 "target": target,
                 "sl": sl,
@@ -143,7 +129,7 @@ def run_prediction():
             }
             msg = (
                 f"<b>NEW BUY SIGNAL</b>\n"
-                f"{row['Underlying']} {row['Option type']} {row['strike']}\n"
+                f"{row['Underlying']} {row['optionType']} {row['strikePrice']}\n"
                 f"Buy Price: {buy_price}\nTarget: {target} | SL: {sl}"
             )
             send_telegram(msg)
@@ -156,11 +142,13 @@ def check_exit_conditions(active_trades):
     updated = {}
     for key, trade in active_trades.items():
         symbol = trade['symbol']
-        df = fetch_yfinance_options(symbol)
-        if df.empty:
+        try:
+            df = nse_optionchain_scrapper(symbol)
+        except Exception as e:
+            log(f"Exit check NSE fetch failed for {symbol}: {e}")
             updated[key] = trade
             continue
-        match = df[(df['strike'] == float(trade['strike'])) & (df['Option type'] == trade['type'])]
+        match = df[(df['strikePrice'] == float(trade['strike'])) & (df['optionType'] == trade['type'])]
         if match.empty:
             updated[key] = trade
             continue
@@ -193,5 +181,5 @@ if __name__ == "__main__":
             send_telegram(err_msg)
 
         if DEBUG_MODE:
-            break  # Exit after 1 loop in debug mode
+            break
         time.sleep(60)
