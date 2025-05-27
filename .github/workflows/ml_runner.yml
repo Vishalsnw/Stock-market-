@@ -3,7 +3,7 @@ name: Run Option ML Signal Every 5 Min
 on:
   schedule:
     # Runs every 5 minutes from 4:00 to 10:00 UTC (which is 9:30 AM to 3:30 PM IST), Monday to Friday only
-  #  - cron: '*/5 4-10 * * 1-5'
+   - cron: '*/5 4-10 * * 1-5'
   workflow_dispatch:
 
 jobs:
