@@ -1,106 +1,120 @@
 import os
 import json
 import time
+import requests
 import pandas as pd
 import numpy as np
-import requests
 from datetime import datetime
-from sklearn.preprocessing import StandardScaler
 from dotenv import load_dotenv
-from nsepython import nse_optionchain_scrapper
+from sklearn.preprocessing import StandardScaler
 import joblib
 import warnings
 
 warnings.filterwarnings("ignore")
+load_dotenv("details.env")
 
 # === CONFIG ===
-load_dotenv("details.env")
 MODEL_PATH = "intraday_model.pkl"
 SCALER_PATH = "scaler.pkl"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-TOP_SYMBOLS = ["RELIANCE", "INFY", "TCS", "HDFCBANK", "ICICIBANK", "LT", "SBIN", "AXISBANK", "ITC", "HINDUNILVR"]
-INDEX_SYMBOLS = ["NIFTY", "BANKNIFTY"]
 ACTIVE_TRADES_FILE = "active_trades.json"
 DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
 
-# === TELEGRAM ===
-def send_telegram(message):
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-            requests.post(url, data=payload)
-        except Exception as e:
-            print(f"Telegram Error: {e}")
+INDEX_SYMBOLS = ["NIFTY", "BANKNIFTY"]
+STOCK_SYMBOLS = ["RELIANCE", "INFY", "TCS", "HDFCBANK", "ICICIBANK", "LT", "SBIN", "AXISBANK", "ITC", "HINDUNILVR"]
 
-# === LOGGING ===
-def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+# === TELEGRAM ===
+def send_telegram(msg):
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
+        try:
+            requests.post(url, data=payload)
+        except:
+            pass
+
+# === DATA FETCHING ===
+def fetch_option_chain(symbol, is_index=True):
+    base_url = "https://www.nseindia.com"
+    api_url = f"https://www.nseindia.com/api/option-chain-{'indices' if is_index else 'equities'}?symbol={symbol}"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "*/*",
+        "Referer": "https://www.nseindia.com/option-chain",
+        "Connection": "keep-alive"
+    }
+
+    session = requests.Session()
+    session.headers.update(headers)
+    try:
+        session.get(base_url, timeout=5)
+        response = session.get(api_url, timeout=10)
+        data = response.json()
+        records = []
+
+        for item in data["records"]["data"]:
+            if 'CE' in item and 'PE' in item:
+                ce, pe = item['CE'], item['PE']
+                records.append({
+                    'strike': ce['strikePrice'],
+                    'lastPrice': ce['lastPrice'],
+                    'open': ce.get('openPrice', 0),
+                    'high': ce.get('highPrice', 0),
+                    'low': ce.get('lowPrice', 0),
+                    'impliedVolatility': ce.get('impliedVolatility', 0),
+                    'volume': ce.get('totalTradedVolume', 0),
+                    'openInterest': ce.get('openInterest', 0),
+                    'Underlying Value': ce.get('underlyingValue', 0),
+                    'Option type': 'CE',
+                    'Symbol': symbol
+                })
+                records.append({
+                    'strike': pe['strikePrice'],
+                    'lastPrice': pe['lastPrice'],
+                    'open': pe.get('openPrice', 0),
+                    'high': pe.get('highPrice', 0),
+                    'low': pe.get('lowPrice', 0),
+                    'impliedVolatility': pe.get('impliedVolatility', 0),
+                    'volume': pe.get('totalTradedVolume', 0),
+                    'openInterest': pe.get('openInterest', 0),
+                    'Underlying Value': pe.get('underlyingValue', 0),
+                    'Option type': 'PE',
+                    'Symbol': symbol
+                })
+        return pd.DataFrame(records)
+    except Exception as e:
+        print(f"Error fetching {symbol}: {e}")
+        return pd.DataFrame()
 
 # === LOAD MODEL AND SCALER ===
-if not os.path.exists(MODEL_PATH) or not os.path.exists(SCALER_PATH):
-    send_telegram("Model or Scaler file not found.")
-    raise FileNotFoundError("Model or Scaler file missing.")
-
 model = joblib.load(MODEL_PATH)
 scaler = joblib.load(SCALER_PATH)
 
-# === FETCH OPTIONS DATA ===
-def fetch_nse_options(symbols):
-    all_data = []
-    for sym in symbols:
-        try:
-            df = nse_optionchain_scrapper(sym)
-            df["Underlying"] = sym
-            all_data.append(df)
-        except Exception as e:
-            log(f"NSE fetch failed for {sym}: {e}")
-    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
-
-# === ACTIVE TRADES ===
 def load_active_trades():
-    if os.path.exists(ACTIVE_TRADES_FILE):
-        with open(ACTIVE_TRADES_FILE, 'r') as f:
-            return json.load(f)
-    return {}
+    return json.load(open(ACTIVE_TRADES_FILE)) if os.path.exists(ACTIVE_TRADES_FILE) else {}
 
 def save_active_trades(data):
-    with open(ACTIVE_TRADES_FILE, 'w') as f:
+    with open(ACTIVE_TRADES_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-# === MAIN PREDICTION LOGIC ===
 def run_prediction():
-    log("Starting prediction cycle...")
-    send_telegram("Prediction cycle started.")
+    print("Fetching data and predicting...")
+    all_df = []
+    for symbol in INDEX_SYMBOLS + STOCK_SYMBOLS:
+        df = fetch_option_chain(symbol, is_index=(symbol in INDEX_SYMBOLS))
+        if not df.empty:
+            all_df.append(df)
 
-    df_all = []
-
-    # Stock options
-    df_stock = fetch_nse_options(TOP_SYMBOLS)
-    if not df_stock.empty:
-        df_all.append(df_stock)
-
-    # Index options
-    df_index = fetch_nse_options(INDEX_SYMBOLS)
-    if not df_index.empty:
-        df_all.append(df_index)
-
-    if not df_all:
-        log("No data fetched. Skipping this cycle.")
+    if not all_df:
+        print("No data fetched.")
         return
 
-    df = pd.concat(df_all, ignore_index=True)
-
-    features = ['strikePrice', 'openPrice', 'highPrice', 'lowPrice', 'lastPrice',
-                'impliedVolatility', 'totalTradedVolume', 'openInterest', 'Underlying Value']
-    
+    df = pd.concat(all_df, ignore_index=True)
+    features = ['strike', 'open', 'high', 'low', 'lastPrice', 'impliedVolatility', 'volume', 'openInterest', 'Underlying Value']
     df = df.dropna(subset=features)
     df = df[df['lastPrice'] > 0]
-
-    if df.empty:
-        log("DataFrame empty after dropping NA or filtering.")
-        return
 
     X = df[features].astype(float)
     X_scaled = scaler.transform(X)
@@ -113,15 +127,15 @@ def run_prediction():
     active_trades = load_active_trades()
 
     for _, row in df[df['Signal'] == 'BUY'].iterrows():
-        key = f"{row['Underlying']}_{row['strikePrice']}_{row['optionType']}"
+        key = f"{row['Symbol']}_{row['strike']}_{row['Option type']}"
         if key not in active_trades:
             buy_price = float(row['lastPrice'])
-            target = round(buy_price * 1.10, 2)
+            target = round(buy_price * 1.1, 2)
             sl = round(buy_price * 0.95, 2)
             active_trades[key] = {
-                "symbol": row['Underlying'],
-                "strike": row['strikePrice'],
-                "type": row['optionType'],
+                "symbol": row['Symbol'],
+                "strike": row['strike'],
+                "type": row['Option type'],
                 "buy_price": buy_price,
                 "target": target,
                 "sl": sl,
@@ -129,57 +143,21 @@ def run_prediction():
             }
             msg = (
                 f"<b>NEW BUY SIGNAL</b>\n"
-                f"{row['Underlying']} {row['optionType']} {row['strikePrice']}\n"
+                f"{row['Symbol']} {row['Option type']} {row['strike']}\n"
                 f"Buy Price: {buy_price}\nTarget: {target} | SL: {sl}"
             )
             send_telegram(msg)
 
     save_active_trades(active_trades)
-    check_exit_conditions(active_trades)
-
-# === EXIT LOGIC ===
-def check_exit_conditions(active_trades):
-    updated = {}
-    for key, trade in active_trades.items():
-        symbol = trade['symbol']
-        try:
-            df = nse_optionchain_scrapper(symbol)
-        except Exception as e:
-            log(f"Exit check NSE fetch failed for {symbol}: {e}")
-            updated[key] = trade
-            continue
-        match = df[(df['strikePrice'] == float(trade['strike'])) & (df['optionType'] == trade['type'])]
-        if match.empty:
-            updated[key] = trade
-            continue
-        ltp = float(match.iloc[0]['lastPrice'])
-        test_input = [[float(trade['strike']), ltp, ltp, ltp, ltp, 0, 0, 0, ltp]]
-        test_scaled = scaler.transform(test_input)
-        pred_close = model.predict(test_scaled)[0]
-
-        if ltp >= trade['target']:
-            send_telegram(f"<b>TARGET HIT:</b> {symbol} {trade['type']} {trade['strike']}\nPrice: {ltp}")
-        elif ltp <= trade['sl']:
-            send_telegram(f"<b>SL HIT:</b> {symbol} {trade['type']} {trade['strike']}\nPrice: {ltp}")
-        elif pred_close < ltp:
-            send_telegram(f"<b>ML EXIT SIGNAL:</b> {symbol} {trade['type']} {trade['strike']}\nPrice: {ltp}")
-        else:
-            updated[key] = trade
-    save_active_trades(updated)
 
 # === MAIN LOOP ===
 if __name__ == "__main__":
-    log("Option ML Tracker started.")
-    send_telegram("Option ML Tracker started successfully.")
-
+    send_telegram("NSE Option ML Tracker Started.")
     while True:
         try:
             run_prediction()
         except Exception as e:
-            err_msg = f"Error in main loop: {str(e)}"
-            log(err_msg)
-            send_telegram(err_msg)
-
+            send_telegram(f"Error in prediction loop: {str(e)}")
         if DEBUG_MODE:
             break
         time.sleep(60)
