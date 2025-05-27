@@ -51,6 +51,9 @@ scaler = joblib.load(SCALER_PATH)
 def fetch_yfinance_options(symbol):
     try:
         ticker = yf.Ticker(symbol)
+        if not ticker.options:
+            log(f"YFinance Error for {symbol}: No options data available")
+            return pd.DataFrame()
         expiry = ticker.options[0]
         opt_chain = ticker.option_chain(expiry)
         calls, puts = opt_chain.calls, opt_chain.puts
@@ -95,16 +98,20 @@ def run_prediction():
         df = fetch_yfinance_options(sym)
         if not df.empty:
             df_all.append(df)
+
     df_index = fetch_nse_options()
     if not df_index.empty:
         df_all.append(df_index)
+
     if not df_all:
-        log("No data fetched.")
+        log("No data fetched. Skipping this cycle.")
         return
 
     df = pd.concat(df_all, ignore_index=True)
+
     features = ['strike', 'open', 'high', 'low', 'lastPrice', 'impliedVolatility', 'volume', 'openInterest', 'Underlying Value']
     df = df.dropna(subset=features)
+
     if df.empty:
         log("DataFrame empty after dropping NA.")
         return
@@ -186,5 +193,5 @@ if __name__ == "__main__":
             send_telegram(err_msg)
 
         if DEBUG_MODE:
-            break  # exit after 1 loop in debug mode
+            break  # Exit after 1 loop in debug mode
         time.sleep(60)
